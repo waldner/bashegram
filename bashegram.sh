@@ -374,6 +374,8 @@ tg_api_init(){
 
   tg_lib['bot_token_encoded']=$(tg_percent_encode "${tg_lib['bot_token']}")
 
+  tg_lib['api_initialized']=1
+
   tg_log NOTICE "Getting self-information"
   tg_get_self_info || return 1
   tg_compute_update_filter_parstring
@@ -382,7 +384,6 @@ tg_api_init(){
   tg_user_senders["*"]=1
 
   tg_log NOTICE "API initialized"
-  tg_lib['api_initialized']=1
 }
 
 tg_get_self_info(){
@@ -632,9 +633,9 @@ tg_check_mandatory_args(){
 
 tg_do_request(){
 
-  #if ! tg_check_api_initialized; then
-  #  return
-  #fi
+  if ! tg_check_api_initialized; then
+    return
+  fi
 
   local method=$1
 
