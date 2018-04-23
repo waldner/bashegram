@@ -44,6 +44,27 @@ See the included [`simplebot.sh`](https://github.com/waldner/bashegram/blob/mast
 
 That is a very simplistic example, in practice a real bot will likely use some kind of persistent storage backend to store messages and/or configuration.
 
+### Calling the API
+
+To call API methods, use the `tg_do_request` function. The first argument is the method name (eg, `sendMessage`, `answerInlineQuery` etc. - _case insensitive_), followed by the method's arguments in **`key=value`** form (at least mandatory ones must be present, they are checked). For methods that can read a local file (eg `sendPhoto`, `sendVideo` etc), you must prefix the file name with a **`@`** so the library knows it's a local file and can check for its existence and arrange for it to be read.
+
+Examples:
+
+```
+# send a message
+tg_do_request sendMessage "chat_id=12345" "text=Hello, world!"
+
+# send a photo from local file
+tg_do_request sendPhoto "chat_id=12345" "photo=@/tmp/photo.jpg" "caption=A nice picture"
+
+# send a photo from URL
+tg_do_request sendPhoto "chat_id=12345" "photo=http://example.com/photo.jpg" "caption=A nice picture"
+
+# answer an inline query with two photos
+tg_do_request answerInlineQuery "inline_query_id=12345" 'results=[{"type":"photo","id":"1","photo_url":"http://example.com/1.jpg","thumb_url":"http://example.com/thumb/1.jpg"},{"type":"photo","id":"2","photo_url":"http://example.com/2.jpg","thumb_url":"http://example.com/thumb/2.jpg"}]'
+
+```
+
 ## Update filters
 
 By default, _all update types from any user are delivered to the bot_. You may want to handle only certain kind of updates (eg, inline queries only) and/or restrict valid senders to a limited set of users. 
@@ -296,14 +317,13 @@ process_message(){
 If you want to send back a custom reply keyboard, you can use the `tg_create_reply_keyboard` function to create the JSON object from a list or array of arguments. Example:
 
 ```
-
 # first two arguments are whether it's a one-time keyboard and whether it should be resized
 # rest of arguments are the keys; use '|' to start a new line
-tg_create_reply_keyboard true false foo bar "baz quu" '|' 4 5 6
+keyboard=$(tg_create_reply_keyboard true false foo bar "baz quu" '|' 4 5 6)
 
-# the kayboard is now in tg_lib['reply_keyboard']:
+# the keyboard is now in ${keyboard}:
 # {"keyboard":[["foo","bar","baz quu"],["4","5","6"]],"resize_keyboard":false,"one_time_keyboard":true}
 
-tg_do_request sendMessage "chat_id=${chat_id}" "text=${text}" "reply_markup=${tg_lib['reply_keyboard']}"
+tg_do_request sendMessage "chat_id=${chat_id}" "text=${text}" "reply_markup=${keyboard}"
 
 ```
