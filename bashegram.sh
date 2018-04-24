@@ -129,9 +129,8 @@ tg_parse_object(){
 
   obj_array=()
   while IFS="=" read -r key value; do
-    obj_array[$key]="$value"
-  done < <(${tg_lib['jq']} -r 'paths as $p | [ $p, getpath($p) ] | "\(.[0] | map(tostring) | join("."))=\(.[1])"' <<< "$json")
-
+    obj_array[$key]="${value//$'\x1'/$'\n'}"
+  done < <(${tg_lib['jq']} -r 'paths as $p | [ $p, (getpath($p) | if type == "string" then gsub("\n"; "\u0001") else . end ) ] | "\(.[0] | map(tostring) | join("."))=\(.[1])"' <<< "$json")
 }
 
 # creates a JSON string from a user-specified associative array (keys are paths)
@@ -146,8 +145,8 @@ tg_create_object(){
       reduce inputs as $e (
         null;
         setpath($e | split("=") | .[0] | split(".") | map(. as $i | try tonumber catch $i);
-        $e | ltrimstr(".") | split("=") | .[1] | . as $v | try fromjson catch $v))
-    ' < <(for key in "${!obj_array[@]}"; do echo "${key}=${obj_array[$key]}"; done)
+        $e | split("=") | .[1] | gsub("\u0001"; "\n") as $v | try fromjson catch $v))
+    ' < <(for key in "${!obj_array[@]}"; do echo "${key}=${obj_array[$key]//$'\n'/$'\x1'}"; done)
   )
 
   code=$?

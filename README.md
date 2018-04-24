@@ -279,10 +279,10 @@ process_inline_query(){
 tg_set_callback "message" process_message || { tg_log ERROR "Failed to set callback for 'message', terminating" && exit 1; }
 tg_set_callback "inline_query" process_inline_query || { tg_log ERROR "Failed to set callback for 'inline_query', terminating" && exit 1; }
 
-# Repeat for each message type you want to handle
+# Repeat for each update type you want to handle
 ```
 
-Each callback function is called with a single argument, which contains **the whole** update (ie, including the "ok" status field). A sample function to handle "message" updates might begin as follows:
+Each callback function is called with a single argument, which contains **the whole** update (ie, including the top-level "ok" and "result" fields). A sample function to handle "message" updates might begin as follows:
 
 ```
 process_message(){
