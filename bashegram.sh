@@ -66,11 +66,17 @@ declare -A tg_parse_modes=( [Markdown]=1
 declare -A tg_lib=()
 
 declare -A tg_user_update_filter=()
+declare -a tg_update_queue=()
 declare -A tg_user_callbacks=()
 
 declare -A tg_user_senders=()
 
 declare -A tg_log_levels=( [DEBUG]=0 [INFO]=1 [NOTICE]=2 [WARNING]=3 [ERROR]=4 )
+
+tg_set_current_offset(){
+  local offset=$1
+  tg_lib['current_offset']=$offset
+}
 
 tg_is_valid_parse_mode(){
   local parse_mode=$1
@@ -203,6 +209,13 @@ tg_set_long_polling_timeout(){
       # after 50 seconds telegram answers anyway, so...
       tg_lib['long_polling_timeout']=50
     fi
+  fi
+}
+
+tg_set_periodic_callback(){
+  local periodic_callback_func=$1
+  if [ "${periodic_callback_func}" != "" ] && declare -f "$periodic_callback_func" >/dev/null; then
+    tg_periodic_callback_func=$periodic_callback_func
   fi
 }
 
@@ -381,7 +394,8 @@ tg_api_init(){
 
   # allow everyone by default
   tg_user_senders["*"]=1
-
+  tg_set_current_offset 0   # set to 0 to get everything
+  tg_periodic_callback_func=
   tg_log NOTICE "API initialized"
 }
 
@@ -412,10 +426,9 @@ tg_get_update_type(){
 
   local update_type
   local -n object_arr=$1
-  local result_update_index=$2
 
   for update_type in "${!tg_update_types[@]}"; do
-    if tg_array_has_key object_arr "${result_update_index}.${update_type}"; then
+    if tg_array_has_key object_arr "${update_type}"; then
       echo "$update_type"
       return
     fi
@@ -449,84 +462,182 @@ tg_check_sender_allowed(){
 
 }
 
-tg_bot_main_loop(){
+tg_get_maybe_updates(){
+
+  local timeout=$1
 
   local last_id=
-  local offset result ok description update
+  local result ok description update
+  local offset
 
-  local -A update_obj
+  offset="offset=${tg_lib['current_offset']}"
+
+  tg_do_request "getUpdates" "timeout=${timeout}" "${tg_lib['update_filter_parstring']}" "${offset}" || continue
+
+  if [ $? -ne 0 ]; then
+    return 1
+  fi
+
+  if [ "${tg_lib['last_http_code']}" != "200" ]; then
+    tg_log ERROR "Bad HTTP code (${tg_lib['last_http_code']}), skipping"
+    return 1
+  fi
+
+  local -A response_obj
+  tg_parse_object response_obj "${tg_lib['last_http_body']}"
+
+  if [ "${response_obj['ok']}" != "true" ]; then
+    tg_log ERROR "Error: ${response_obj['description']}"
+    return 1
+  fi
+
+  # if we get here, query was successful, put result(s) in the queue
+
+  local update_count=0
+
+  while tg_array_has_key response_obj "result.${update_count}"; do
+
+    last_id=${response_obj[result.${update_count}.update_id]}
+    tg_set_current_offset $(( last_id + 1 ))
+    tg_update_queue+=( "${response_obj[result.${update_count}]}" )
+
+    ((update_count++))
+  done
+
+  return 0
+
+}
+
+tg_dequeue_update(){
+
+  local i
+
+  for ((i=0; i< ${#tg_update_queue[@]} - 1; i++)); do
+    tg_update_queue[$i]=${tg_update_queue[$i+1]}
+  done
+
+  if [ ${#tg_update_queue[@]} -gt 0 ]; then
+    unset tg_update_queue[${#a[@]}-1]
+  fi
+}
+
+tg_queue_has_updates(){
+  [ ${#tg_update_queue[@]} -gt 0 ]
+}
+
+tg_get_first_update(){
+  if tg_queue_has_updates; then
+    echo "${tg_update_queue[0]}"
+  fi
+}
+
+tg_dispatch_updates(){
+
+  local do_filter=$1
+
+  while tg_queue_has_updates; do
+
+    local update=$(tg_get_first_update)
+
+    local -A update_obj
+
+    tg_parse_object update_obj "$update"
+
+    local update_type=$(tg_get_update_type update_obj)
+
+    if [ "$update_type" = "" ]; then
+
+      tg_log ERROR "Cannot determine update type for update $update, skipping"
+
+    else
+
+      local dispatch=1
+
+      if [ "$do_filter" = "1" ]; then
+        if [[ "$update_type" =~ ^(edited_)?message$ ]]; then
+          # check for allowed users
+          local sender_id=${update_obj[${update_type}.from.id]}
+          local sender_username=${update_obj[${update_type}.from.username]}
+          if ! tg_check_sender_allowed "$update_type" "${sender_id}" "${sender_username}"; then
+            dispatch=0
+          fi
+        fi
+      fi
+
+      if [ $dispatch = "1" ]; then
+        tg_dispatch_update "$update" "${update_type}"
+      else
+        tg_log NOTICE "sender ${sender_id} (${sender_username}) disallowed, discarding message"
+      fi
+
+    fi
+
+    tg_dequeue_update
+  done
+
+}
+
+
+tg_dispatch_update(){
+
+  local update=$1 update_type=$2
+
+  tg_log DEBUG "Update is of type $update_type"
+
+  local callback_func=${tg_user_callbacks[$update_type]}
+
+  if [ "${callback_func}" != "" ] && declare -f "$callback_func" >/dev/null; then
+    tg_log DEBUG "calling user callback for '$update_type': '$callback_func'"
+    "$callback_func" "${update}"
+  else
+    tg_log WARNING "no callback defined for update type '$update_type', discarding message"
+  fi
+}
+
+tg_get_queue_length(){
+  echo "${#tg_update_queue[@]}"
+}
+
+tg_bot_main_loop(){
+
+  tg_last_periodic_callback_invocation=$(printf '%(%s)T\n' -1)
+
+  local before_length after_length before after
+
+  local timeout=${tg_lib['long_polling_timeout']}
 
   while true; do
 
-    offset="offset=0"
+    before=$(printf '%(%s)T\n' -1)
+    before_length=$(tg_get_queue_length)
 
-    if [ "$last_id" != "" ]; then
-      offset="offset=$(( last_id + 1 ))"
-    fi
+    if tg_get_maybe_updates ${timeout}; then
 
-    tg_do_request "getUpdates" "timeout=${tg_lib['long_polling_timeout']}" "${tg_lib['update_filter_parstring']}" "${offset}" || continue
+      after=$(printf '%(%s)T\n' -1)
+      after_length=$(tg_get_queue_length)
 
-    if [ $? -ne 0 ]; then
-      continue
-    fi
-
-    if [ "${tg_lib['last_http_code']}" != "200" ]; then
-      tg_log ERROR "Bad HTTP code (${tg_lib['last_http_code']}), skipping"
-      continue
-    fi
-
-    tg_parse_object update_obj "${tg_lib['last_http_body']}"
-
-    #tg_dump_object update_obj
-
-    local update_count=0
-
-    while true; do 
-
-      if ! tg_array_has_key update_obj "result.${update_count}"; then
-        break
-      fi
-
-      tg_log DEBUG "Got update ${update_obj[result.${update_count}]}, trying to parse it"
-
-      #local -A update_obj
-      #tg_parse_object update_obj "$update"
-
-      local update_type
-      update_type=$(tg_get_update_type update_obj "result.${update_count}")
-
-      if [ "$update_type" = "" ]; then
-        tg_log ERROR "Cannot determine update type for update $update, skipping"
-        continue
-      fi
-
-      tg_log INFO "Got update of type '$update_type'"
-
-      last_id=${update_obj[result.${update_count}.update_id]}
-      tg_log DEBUG "Parsed update $last_id"
-      tg_log DEBUG "Update is of type $update_type"
-      
-      # check for allowed users
-      local sender_id=${update_obj[result.${update_count}.${update_type}.from.id]}
-      local sender_username=${update_obj[result.${update_count}.${update_type}.from.username]}
-
-      if tg_check_sender_allowed "$update_type" "${sender_id}" "${sender_username}"; then
-
-        local callback_func=${tg_user_callbacks[$update_type]}
-
-        if [ "${callback_func}" != "" ] && declare -F "$callback_func" >/dev/null; then
-          tg_log DEBUG "Calling user callback for '$update_type': '$callback_func'"
-          "$callback_func" "${update_obj[result.${update_count}]}"
-        else
-          tg_log WARNING "No callback defined for update type '$update_type', discarding message"
-        fi
+      if [ $after_length -eq $before_length ]; then
+        # no new messages, timeout expired
+        timeout=${tg_lib['long_polling_timeout']}
       else
-        tg_log NOTICE "Sender ${sender_id} (${sender_username}) disallowed, discarding message"
+        timeout=$(( ${timeout} - ( $after - $before ) ))
+      fi
+      if [ $timeout -le 0 ]; then
+        timeout=${tg_lib['long_polling_timeout']}
       fi
 
-      ((update_count++))
+      tg_dispatch_updates 1
+    fi
 
-    done
+    if [ "$tg_periodic_callback_func" != "" ]; then
+
+      local now=$(printf '%(%s)T\n' -1)
+
+      if [ $(( now - tg_last_periodic_callback_invocation )) -ge ${tg_lib['long_polling_timeout']} ]; then
+        $tg_periodic_callback_func
+        tg_last_periodic_callback_invocation=$now
+      fi
+    fi
 
     sleep 0.1
   done
@@ -756,15 +867,7 @@ tg_do_request(){
 
   tg_log DEBUG "Last http body: ${tg_lib['last_http_body']}"
 
-  local -A result_obj
-  tg_parse_object result_obj "${tg_lib['last_http_body']}"
-
-  if [ "${result_obj['ok']}" != "true" ]; then
-    tg_log ERROR "Error: ${result_obj['description']}"
-    return 1
-  fi
-
-  return $result
+  return 0
 }
 
 tg_get_arg_value(){

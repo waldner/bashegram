@@ -103,6 +103,7 @@ tg_update_filter_allow message edited_message inline_query
 
 ### Filter by sender
 
+**NOTE:** This filter applies only to updates of type `message` or `edited_message`, which have a real sender (as opposed to, say, channel posts).
 Sample code to apply filtering by sender (user ID or username):
 
 ```
@@ -310,6 +311,62 @@ process_message(){
 
 ```
 
+### Periodic callback
+
+In addition to the callbacks that manage specific update types (described above), it's possible to supply a so-called _periodic callback_, which is simply a function that gets called, well, periodically during the bot's main loop. The given function will be called at most once per polling interval. Every time the main loop returns from the **`getMessages`** call (which lasts at most the polling interval time), it checks whether it's time to call the perioduc callback (if one is defined), and if so, it calls it.
+
+The periodic callback function can be useful if the bot has to do some sort of external activity and/or send messages or notifications to a chat that are not in response to commands.
+
+Of course, while the periodic callback runs the bot won't be able to respond to commands, so this has to be kept in mind if the function takes a long time to run.
+
+This is an example periodic callback function that checks whether some event has occurred and sends a notification to a channel (note that the bot must be a channel administrator to do this):
+
+```
+check_event(){
+
+  local channel_id="12345678"   # where to send our notifications
+
+  local event
+
+  event=$(command to check event)
+
+  if [ "$event" != "" ]; then
+    tg_do_request sendMessage "chat_id=${channel_id}" "text=Event happened: $event"
+  fi
+}
+
+...
+
+# optional
+tg_set_long_polling_timeout 30
+
+# now "check_event" will be called roughly every 30 seconds
+tg_set_periodic_callback check_event
+
+...
+
+tg_bot_main_loop
+
+```
+
+### Advanced usage
+
+If the periodic callback function or the main loop logic provided by the library are not enough for your needs, you can directly call the specific library functions that check for new messages and dispatch them. Here are the available functions:
+
+* **`tg_get_maybe_updates`**: this function calls the actual `getUpdates` API and takes a single argument: the polling timeout. If updates are available, they are added to an internal update queue and the update offset is updated.
+
+* **`tg_queue_has_updates`**: use this function to check whether there are updates in the update queue.
+
+* **`tg_get_first_update`**: If there are queued updates, it returns the first update in the queue.
+
+* **`tg_get_queue_length`**: returns the current number of updates in the queue.
+
+* **`tg_dequeue_update`**: removes the first queued update from the update queue.
+
+* **`tg_dispatch_updates`**: this function checks whether there are queued messages, determine their types, dequeue them and dispatches them to the corresponding user callback function for the specific type (if one is available). The function takes a single argument which can be `0` or `1`: if it's `1`, the function also performs sender filter checks (where applicable) and does not dispatch a message if its sender is not authorized; if it's `0`, all messages are dispatched, without checks.
+
+* **`tg_dispatch_update`**: this function dispatches a single update, and needs two arguments: the actual update, and the update type. If a callback exists for the update type, it is called passing the update as argument.
+
 ## Utility functions
 
 ### Reply keyboard
@@ -327,3 +384,4 @@ keyboard=$(tg_create_reply_keyboard true false foo bar "baz quu" '|' 4 5 6)
 tg_do_request sendMessage "chat_id=${chat_id}" "text=${text}" "reply_markup=${keyboard}"
 
 ```
+
