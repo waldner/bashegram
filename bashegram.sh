@@ -749,6 +749,11 @@ tg_do_request(){
 
   local method=$1
 
+  if [ "$method" = "" ]; then
+    tg_log ERROR "Empty or missing method requested, returning"
+    return 1
+  fi
+
   if ! tg_is_valid_method "${method,,?}"; then
     tg_log ERROR "Invalid or not implemented method '$method' requested"
     return 1
