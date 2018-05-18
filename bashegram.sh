@@ -166,7 +166,7 @@ tg_array_has_key(){
   local key=$2
   local -n _object_arr=$1
 
-  [[ "${_object_arr[$key]+foobar}" ]]
+  [ "$key" != "" ] && [[ "${_object_arr[$key]+foobar}" ]]
 }
 
 tg_get_curtime(){
@@ -748,11 +748,6 @@ tg_do_request(){
   fi
 
   local method=$1
-
-  if [ "$method" = "" ]; then
-    tg_log ERROR "Empty or missing method requested, returning"
-    return 1
-  fi
 
   if ! tg_is_valid_method "${method,,?}"; then
     tg_log ERROR "Invalid or not implemented method '$method' requested"
