@@ -380,7 +380,7 @@ tg_sender_modify(){
 tg_api_init(){
   tg_log NOTICE "Telegram API initialization starting..."
   tg_log NOTICE "Checking for bash >= 4.3..."
-  ( [ ${BASH_VERSINFO[0]} -ge 4 ] && [ ${BASH_VERSINFO[1]} -ge 3 ] ) || return 1
+  ( [ ${BASH_VERSINFO[0]} -gt 4 ] || ( [ ${BASH_VERSINFO[0]} -eq 4 ] && [ ${BASH_VERSINFO[1]} -ge 3 ] ) ) || return 1
   tg_check_required_binaries || return 1
   tg_get_credentials || return 1
 
