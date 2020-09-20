@@ -472,7 +472,7 @@ tg_get_maybe_updates(){
 
   offset="offset=${tg_lib['current_offset']}"
 
-  tg_do_request "getUpdates" "timeout=${timeout}" "${tg_lib['update_filter_parstring']}" "${offset}" || continue
+  tg_do_request "getUpdates" "timeout=${timeout}" "${tg_lib['update_filter_parstring']}" "${offset}" || return 1
 
   if [ $? -ne 0 ]; then
     return 1
